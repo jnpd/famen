@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 import uuid
 from datetime import datetime
 
@@ -66,6 +67,13 @@ def normalize_value(value):
     return text if text else "-"
 
 
+def safe_name_piece(value) -> str:
+    text = normalize_value(value)
+    text = re.sub(r'[\\/:*?"<>|]+', '-', text)
+    text = re.sub(r"\s+", " ", text).strip(" .-")
+    return (text or "未填写")[:48]
+
+
 def result_row(section: str, parameter: str, value, unit: str = "-", source: str = "-", status: str = "已保存") -> dict:
     return {
         "SECTION": section,
@@ -95,7 +103,12 @@ def save_workbench_result(
     timestamp = now.strftime("%Y%m%d-%H%M%S")
     suffix = uuid.uuid4().hex[:4].upper()
 
-    dataset_name = body.name.strip() if body.name and body.name.strip() else f"固定球阀-{nps}-{pressure}-{leakage}-{timestamp}-{suffix}"
+    if body.name and body.name.strip():
+        dataset_name = safe_name_piece(body.name)
+    else:
+        dataset_name = f"固定球阀-{safe_name_piece(nps)}-{safe_name_piece(pressure)}-{safe_name_piece(leakage)}-{timestamp}-{suffix}"
+    dataset_name = dataset_name[:180]
+
     dataset = Dataset(
         knowledge_base_id=kb.id,
         name=dataset_name,
