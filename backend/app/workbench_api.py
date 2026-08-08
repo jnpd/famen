@@ -13,6 +13,7 @@ from .database import get_db
 from .models import Dataset, DatasetField, DatasetRecord, KnowledgeBase, User
 from .schemas import WorkbenchSaveRequest
 from .standard_registry import STANDARD_LINKS, STANDARD_REGISTRY
+from .api6d_standard_data import API6D_TOP_MOUNTED_BALL_STRUCTURE
 
 router = APIRouter(prefix="/api/workbench", tags=["workbench"])
 RESULT_KB_CODE = "design_result"
@@ -102,10 +103,48 @@ def workbench_result_detail(dataset_id:int,db:Session=Depends(get_db)):
 def _standard_row(item:dict,index:int,link_count:int):return {**item,"id":index+1,"link_count":link_count}
 
 
+def _api6d_virtual_link() -> dict:
+    fields = [
+        ("valve_type", "阀门类型", "-", "标准附录中的结构类型，用于区分球阀、闸阀等结构。"),
+        ("structure_type", "结构形式", "-", "API 6D 附录B中的球阀结构示例；本组数据对应顶装固定式。"),
+        ("bore_type", "通径形式", "-", "表C.2覆盖全径和缩径两类球阀结构长度。"),
+        ("pressure_class_group", "压力等级组", "-", "表C.2按Class 150/300与Class 600/900分组。"),
+        ("nps", "NPS", "in", "公称管径，作为结构长度查表键。"),
+        ("dn", "DN", "mm", "与NPS对应的公称尺寸。"),
+        ("face_type", "端面类型", "-", "突面A对应面-面结构长度。"),
+        ("A_mm", "结构长度 A", "mm", "突面（面-面）结构长度，直接影响阀门安装空间。"),
+        ("B_mm", "结构长度 B", "mm", "焊接端（端-端）结构长度。"),
+        ("C_mm", "结构长度 C", "mm", "环接（端-端）结构长度。"),
+        ("A_in", "结构长度 A", "in", "标准原始英制值。"),
+        ("B_in", "结构长度 B", "in", "标准原始英制值。"),
+        ("C_in", "结构长度 C", "in", "标准原始英制值。"),
+        ("tolerance_mm", "结构长度公差", "mm", "NPS 12（DN 300）及以上采用±3.0 mm；更小尺寸采用±1.5 mm。"),
+        ("source", "来源", "-", "用户提供的API 6D-2021中文版附录C表C.2。"),
+    ]
+    field_payload = [{"field_code": code, "field_name": name, "unit": unit, "description": desc} for code, name, unit, desc in fields]
+    rows=[]
+    for idx, item in enumerate(API6D_TOP_MOUNTED_BALL_STRUCTURE, start=1):
+        rows.append({"_id": f"api6d-{idx}", **item})
+    return {
+        "standard_code": "API 6D",
+        "part_name": "球阀（顶装固定式）",
+        "dataset_name": "API 6D-2021 附录C 表C.2 球阀结构长度",
+        "applicability": "球阀 · 顶装固定式 · 全径/缩径 · Class 150/300/600/900",
+        "data_status": "已录入（用户提供标准文件）",
+        "note": "这里不是只展示“API 6D是什么”，而是把标准对应的零件、规格键和A/B/C实际尺寸直接展开。",
+        "dataset_id": None,
+        "dataset_exists": True,
+        "source_document": "API 6D-2021 中文版 石油和天然气工业管线阀门",
+        "fields": field_payload,
+        "rows": rows,
+    }
+
+
 @router.get("/standards")
 def list_standards(keyword:str="",system:str="",data_status:str="",sort:str="code",db:Session=Depends(get_db)):
     links_by_code={}
     for link in STANDARD_LINKS:links_by_code.setdefault(link["standard_code"],[]).append(link)
+    links_by_code["API 6D"] = links_by_code.get("API 6D", []) + [{"virtual": True}]
     rows=[]
     for idx,item in enumerate(STANDARD_REGISTRY):
         if keyword and keyword.lower() not in f'{item["code"]} {item["title"]} {item["target_parts"]} {item["key_fields"]}'.lower():continue
@@ -122,15 +161,19 @@ def list_standards(keyword:str="",system:str="",data_status:str="",sort:str="cod
 @router.get("/standards/{standard_id}")
 def standard_detail(standard_id:int,db:Session=Depends(get_db)):
     if standard_id<1 or standard_id>len(STANDARD_REGISTRY):raise HTTPException(404,"标准不存在")
-    item=STANDARD_REGISTRY[standard_id-1]; links=[x for x in STANDARD_LINKS if x["standard_code"]==item["code"]]; link_payload=[]
+    item=STANDARD_REGISTRY[standard_id-1]
+    links=[_api6d_virtual_link()] if item["code"] == "API 6D" else [x for x in STANDARD_LINKS if x["standard_code"]==item["code"]]
+    link_payload=[]
     for link in links:
+        if link.get("virtual"):
+            link_payload.append(link); continue
         dataset=db.scalar(select(Dataset).where(Dataset.name==link["dataset_name"]).order_by(Dataset.updated_at.desc()))
         payload={**link,"dataset_id":dataset.id if dataset else None,"dataset_exists":bool(dataset),"fields":[],"rows":[]}
         if dataset:
             fields=db.scalars(select(DatasetField).where(DatasetField.dataset_id==dataset.id).order_by(DatasetField.order_no)).all(); selected=[f for f in fields if f.field_name in link["field_names"] or f.source_name in link["field_names"]]
             payload["fields"]=[{"field_code":f.field_code,"field_name":f.field_name,"unit":f.unit,"description":getattr(f,"description",None) or f"字段“{f.field_name}”用于该参数表的规格查询、计算或校核。"} for f in selected]
-            records=db.scalars(select(DatasetRecord).where(DatasetRecord.dataset_id==dataset.id).order_by(DatasetRecord.id.asc()).limit(80)).all(); codes=[f.field_code for f in selected]; payload["rows"]=[{"_id":r.id,**{code:(r.data or {}).get(code) for code in codes}} for r in records]
+            records=db.scalars(select(DatasetRecord).where(DatasetRecord.dataset_id==dataset.id).order_by(DatasetRecord.id.asc()).limit(80)).all(); codes=[f.field_code for f in selected]; payload["rows"]= [{"_id":r.id,**{code:(r.data or {}).get(code) for code in codes}} for r in records]
         else:
             payload["fields"]=[{"field_code":re.sub(r"[^A-Za-z0-9]+","_",name).strip("_").upper() or f"FIELD_{idx:02d}","field_name":name,"unit":"","description":f"规范字段“{name}”用于{link['part_name']}的规格定义、查询、计算或校核；正式数值需要导入对应标准数据。"} for idx,name in enumerate(link["field_names"],start=1)]
         link_payload.append(payload)
-    return {**item,"id":standard_id,"links":link_payload,"linked_dataset_count":sum(1 for x in link_payload if x["dataset_exists"])}
+    return {**item,"id":standard_id,"links":link_payload,"linked_dataset_count":sum(1 for x in link_payload if x.get("dataset_exists"))}
