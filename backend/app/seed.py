@@ -11,6 +11,7 @@ LIBRARIES = [
     ("阀门参数库", "parameter", "parameter", "不同阀门、型号、规格的工程结构参数", "blue"),
     ("材料标准库", "material", "material", "材料牌号、标准号、强度与温度参数", "green"),
     ("BOM规则库", "bom", "bom", "零部件选配、规格关联与BOM生成规则", "blue"),
+    ("设计成果库", "design_result", "result", "保存参数工作台每一次生成的输入快照、几何参数、装配参数、来源与状态", "blue"),
 ]
 
 
@@ -56,13 +57,21 @@ def ensure_admin(db: Session):
     db.commit()
 
 
+def ensure_libraries(db: Session):
+    existing_codes = set(db.scalars(select(KnowledgeBase.code)).all())
+    changed = False
+    for name, code, typ, desc, accent in LIBRARIES:
+        if code in existing_codes:
+            continue
+        db.add(KnowledgeBase(name=name, code=code, type=typ, description=desc, accent=accent))
+        changed = True
+    if changed:
+        db.commit()
+
+
 def seed(db: Session):
     ensure_admin(db)
-    existing = db.scalar(select(KnowledgeBase.id).limit(1))
-    if not existing:
-        for name, code, typ, desc, accent in LIBRARIES:
-            db.add(KnowledgeBase(name=name, code=code, type=typ, description=desc, accent=accent))
-        db.commit()
+    ensure_libraries(db)
 
     dictionary = db.scalar(select(KnowledgeBase).where(KnowledgeBase.code == "dictionary"))
     if not dictionary:
