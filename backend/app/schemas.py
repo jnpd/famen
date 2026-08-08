@@ -1,5 +1,5 @@
-from typing import Any
-from pydantic import BaseModel, Field
+from typing import Any, Literal
+from pydantic import BaseModel, Field, model_validator
 
 
 class KnowledgeBaseCreate(BaseModel):
@@ -23,7 +23,14 @@ class FieldMapping(BaseModel):
 
 class ImportPreviewRequest(BaseModel):
     sheet_name: str
-    header_row: int = Field(ge=0)
+    header_mode: Literal["auto", "row", "none"] = "auto"
+    header_row: int | None = Field(default=None, ge=0)
+
+    @model_validator(mode="after")
+    def validate_header_row(self):
+        if self.header_mode == "row" and self.header_row is None:
+            raise ValueError("手动指定表头时必须填写表头行")
+        return self
 
 
 class ImportCommitRequest(BaseModel):
@@ -32,8 +39,15 @@ class ImportCommitRequest(BaseModel):
     category: str | None = None
     standard_no: str | None = None
     sheet_name: str
-    header_row: int = Field(ge=0)
+    header_mode: Literal["auto", "row", "none"] = "row"
+    header_row: int | None = Field(default=None, ge=0)
     mappings: list[FieldMapping]
+
+    @model_validator(mode="after")
+    def validate_header_row(self):
+        if self.header_mode == "row" and self.header_row is None:
+            raise ValueError("手动指定表头时必须填写表头行")
+        return self
 
 
 class DatasetQuery(BaseModel):
