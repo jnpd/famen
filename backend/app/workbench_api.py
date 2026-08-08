@@ -126,6 +126,7 @@ def _api6d_virtual_link() -> dict:
     for idx, item in enumerate(API6D_TOP_MOUNTED_BALL_STRUCTURE, start=1):
         rows.append({"_id": f"api6d-{idx}", **item})
     return {
+        "virtual": True,
         "standard_code": "API 6D",
         "part_name": "球阀（顶装固定式）",
         "dataset_name": "API 6D-2021 附录C 表C.2 球阀结构长度",
@@ -171,9 +172,9 @@ def standard_detail(standard_id:int,db:Session=Depends(get_db)):
         payload={**link,"dataset_id":dataset.id if dataset else None,"dataset_exists":bool(dataset),"fields":[],"rows":[]}
         if dataset:
             fields=db.scalars(select(DatasetField).where(DatasetField.dataset_id==dataset.id).order_by(DatasetField.order_no)).all(); selected=[f for f in fields if f.field_name in link["field_names"] or f.source_name in link["field_names"]]
-            payload["fields"]=[{"field_code":f.field_code,"field_name":f.field_name,"unit":f.unit,"description":getattr(f,"description",None) or f"字段“{f.field_name}”用于该参数表的规格查询、计算或校核。"} for f in selected]
-            records=db.scalars(select(DatasetRecord).where(DatasetRecord.dataset_id==dataset.id).order_by(DatasetRecord.id.asc()).limit(80)).all(); codes=[f.field_code for f in selected]; payload["rows"]= [{"_id":r.id,**{code:(r.data or {}).get(code) for code in codes}} for r in records]
+            payload["fields"]= [{"field_code":f.field_code,"field_name":f.field_name,"unit":f.unit,"description":getattr(f,"description",None) or f"字段“{f.field_name}”用于该参数表的规格查询、计算或校核。"} for f in selected]
+            records=db.scalars(select(DatasetRecord).where(DatasetRecord.dataset_id==dataset.id).order_by(DatasetRecord.id.asc()).limit(80)).all(); codes=[f.field_code for f in selected]; payload["rows"]=[{"_id":r.id,**{code:(r.data or {}).get(code) for code in codes}} for r in records]
         else:
-            payload["fields"]=[{"field_code":re.sub(r"[^A-Za-z0-9]+","_",name).strip("_").upper() or f"FIELD_{idx:02d}","field_name":name,"unit":"","description":f"规范字段“{name}”用于{link['part_name']}的规格定义、查询、计算或校核；正式数值需要导入对应标准数据。"} for idx,name in enumerate(link["field_names"],start=1)]
+            payload["fields"]= [{"field_code":re.sub(r"[^A-Za-z0-9]+","_",name).strip("_").upper() or f"FIELD_{idx:02d}","field_name":name,"unit":"","description":f"规范字段“{name}”用于{link['part_name']}的规格定义、查询、计算或校核；正式数值需要导入对应标准数据。"} for idx,name in enumerate(link["field_names"],start=1)]
         link_payload.append(payload)
     return {**item,"id":standard_id,"links":link_payload,"linked_dataset_count":sum(1 for x in link_payload if x.get("dataset_exists"))}
