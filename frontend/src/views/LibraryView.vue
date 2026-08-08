@@ -1,5 +1,11 @@
 <template>
   <div class="library-page" v-loading="loading">
+    <div class="page-back-row">
+      <el-button text class="back-button" @click="router.push({ name: 'dashboard' })">
+        <el-icon><ArrowLeft /></el-icon>返回知识库总览
+      </el-button>
+    </div>
+
     <div class="library-header">
       <div>
         <div class="eyebrow">工程知识库</div>
@@ -44,7 +50,7 @@
 <script setup>
 import { computed, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { DocumentAdd, Search } from '@element-plus/icons-vue'
+import { ArrowLeft, DocumentAdd, Search } from '@element-plus/icons-vue'
 import http from '../api/http.js'
 import ImportDrawer from '../components/ImportDrawer.vue'
 
@@ -72,3 +78,7 @@ function openDataset(row) { router.push({ name: 'dataset', params: { id: row.id 
 watch(() => route.params.id, load)
 onMounted(load)
 </script>
+
+<style scoped>
+.page-back-row{margin-bottom:10px}.back-button{padding-left:2px;color:#5f7188}.back-button:hover{color:#1262df}
+</style>
