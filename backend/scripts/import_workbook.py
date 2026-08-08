@@ -25,7 +25,7 @@ METADATA_WORDS = ("目录", "说明", "总览", "汇总", "索引")
 
 
 def recommend_library_code(sheet_name: str, default_code: str = "parameter") -> str:
-    """只做知识库路由推荐，不参与 Excel 结构识别；未知 Sheet 自动落到默认库。"""
+    """Only routes a detected table to a knowledge base; it does not affect structure detection."""
     name = (sheet_name or "").strip().lower()
 
     if any(word in name for word in ("材料", "material")):
@@ -68,7 +68,11 @@ def make_unique_codes(columns: list[dict]) -> list[dict]:
 
 def import_dataset(db, workbook: Path, sheet_name: str, analysis: dict, kb: KnowledgeBase, replace: bool) -> tuple[str, int]:
     header_row = analysis.get("header_row")
-    payload = preview_payload(workbook, sheet_name, header_row, analysis=analysis, header_mode="auto")
+
+    # Keep this call compatible with both the old and new excel_service.py.
+    # The structure analysis is already completed above; preview_payload is only
+    # needed here to build dynamic column definitions.
+    payload = preview_payload(workbook, sheet_name, header_row)
     columns = make_unique_codes(payload.get("columns") or [])
     if not columns:
         return "skip:no-fields", 0
@@ -136,21 +140,21 @@ def import_dataset(db, workbook: Path, sheet_name: str, analysis: dict, kb: Know
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="批量扫描 Excel 全部 Sheet，并写入阀门知识库 SQLite。")
-    parser.add_argument("workbook", help="Excel 文件路径（.xlsx/.xls）")
-    parser.add_argument("--default-kb", default="parameter", help="无法判断时默认知识库 code，默认 parameter")
-    parser.add_argument("--min-confidence", type=int, default=60, help="自动导入最低表头可信度，默认 60")
-    parser.add_argument("--include-metadata", action="store_true", help="同时导入目录/说明/汇总/索引类 Sheet")
-    parser.add_argument("--include-low-confidence", action="store_true", help="低可信度 Sheet 也尝试导入")
-    parser.add_argument("--replace", action="store_true", help="同知识库同名数据集存在时替换")
+    parser = argparse.ArgumentParser(description="Import all reliable table-like sheets from an Excel workbook into SQLite.")
+    parser.add_argument("workbook", help="Excel file path (.xlsx/.xls)")
+    parser.add_argument("--default-kb", default="parameter", help="Fallback knowledge base code (default: parameter)")
+    parser.add_argument("--min-confidence", type=int, default=60, help="Minimum auto-import confidence (default: 60)")
+    parser.add_argument("--include-metadata", action="store_true", help="Also import metadata/description/summary/index sheets")
+    parser.add_argument("--include-low-confidence", action="store_true", help="Try importing low-confidence sheets")
+    parser.add_argument("--replace", action="store_true", help="Replace an existing dataset with the same name in the same knowledge base")
     args = parser.parse_args()
 
     workbook = Path(args.workbook).expanduser().resolve()
     if not workbook.exists():
-        print(f"[ERROR] 文件不存在：{workbook}")
+        print(f"[ERROR] File not found: {workbook}")
         return 2
     if workbook.suffix.lower() not in {".xlsx", ".xls"}:
-        print("[ERROR] 仅支持 .xlsx / .xls")
+        print("[ERROR] Only .xlsx / .xls files are supported")
         return 2
 
     Base.metadata.create_all(bind=engine)
@@ -158,58 +162,64 @@ def main() -> int:
         seed(db)
         libraries = {row.code: row for row in db.scalars(select(KnowledgeBase)).all()}
         if args.default_kb not in libraries:
-            print(f"[ERROR] 默认知识库不存在：{args.default_kb}")
+            print(f"[ERROR] Default knowledge base does not exist: {args.default_kb}")
             return 2
 
         imported_count = 0
         imported_rows = 0
         skipped: list[str] = []
 
-        print(f"\n文件：{workbook.name}")
-        print("=" * 72)
+        print(f"\nWorkbook: {workbook.name}")
+        print("=" * 88)
         for sheet_name in list_sheets(workbook):
-            analysis = analyze_sheet_structure(workbook, sheet_name)
-            confidence = int(analysis.get("header_confidence") or 0)
-            structure_type = analysis.get("structure_type") or "table"
-            header_row = analysis.get("header_row")
+            try:
+                analysis = analyze_sheet_structure(workbook, sheet_name)
+                confidence = int(analysis.get("header_confidence") or 0)
+                structure_type = analysis.get("structure_type") or "table"
+                header_row = analysis.get("header_row")
 
-            if is_metadata_sheet(sheet_name) and not args.include_metadata:
-                skipped.append(f"{sheet_name}（元数据/说明类）")
-                print(f"[SKIP] {sheet_name:<22} 元数据/说明类")
-                continue
-            if structure_type != "table" or header_row is None:
-                if not args.include_low_confidence:
-                    skipped.append(f"{sheet_name}（未找到可靠表头）")
-                    print(f"[SKIP] {sheet_name:<22} 未找到可靠表头")
+                if is_metadata_sheet(sheet_name) and not args.include_metadata:
+                    skipped.append(f"{sheet_name} (metadata)")
+                    print(f"[SKIP] {sheet_name} | metadata/description sheet")
                     continue
-            if confidence < args.min_confidence and not args.include_low_confidence:
-                skipped.append(f"{sheet_name}（可信度 {confidence}%）")
-                print(f"[SKIP] {sheet_name:<22} 可信度 {confidence}%")
-                continue
+                if structure_type != "table" or header_row is None:
+                    if not args.include_low_confidence:
+                        skipped.append(f"{sheet_name} (no reliable header)")
+                        print(f"[SKIP] {sheet_name} | no reliable header")
+                        continue
+                if confidence < args.min_confidence and not args.include_low_confidence:
+                    skipped.append(f"{sheet_name} (confidence {confidence}%)")
+                    print(f"[SKIP] {sheet_name} | confidence {confidence}%")
+                    continue
 
-            kb_code = recommend_library_code(sheet_name, args.default_kb)
-            kb = libraries.get(kb_code) or libraries[args.default_kb]
-            status, row_count = import_dataset(db, workbook, sheet_name, analysis, kb, args.replace)
-            if status == "imported":
-                imported_count += 1
-                imported_rows += row_count
-                print(
-                    f"[ OK ] {sheet_name:<22} -> {kb.name:<10} "
-                    f"表头第 {header_row + 1} 行 | 可信度 {confidence:>3}% | {row_count} 条"
-                )
-            else:
-                skipped.append(f"{sheet_name}（{status}）")
-                print(f"[SKIP] {sheet_name:<22} {status}")
+                kb_code = recommend_library_code(sheet_name, args.default_kb)
+                kb = libraries.get(kb_code) or libraries[args.default_kb]
+                status, row_count = import_dataset(db, workbook, sheet_name, analysis, kb, args.replace)
+                if status == "imported":
+                    imported_count += 1
+                    imported_rows += row_count
+                    print(
+                        f"[ OK ] {sheet_name} -> {kb.name} | "
+                        f"header row {header_row + 1} | confidence {confidence}% | {row_count} rows"
+                    )
+                else:
+                    skipped.append(f"{sheet_name} ({status})")
+                    print(f"[SKIP] {sheet_name} | {status}")
+            except Exception as exc:
+                db.rollback()
+                skipped.append(f"{sheet_name} (error: {exc})")
+                print(f"[ERR ] {sheet_name} | {type(exc).__name__}: {exc}")
+                continue
 
         db.commit()
 
-    print("=" * 72)
-    print(f"完成：导入 {imported_count} 个数据集，共 {imported_rows} 条记录；跳过 {len(skipped)} 个 Sheet。")
+    print("=" * 88)
+    print(f"DONE: {imported_count} datasets, {imported_rows} rows imported, {len(skipped)} sheets skipped.")
     if skipped:
-        print("跳过项：")
+        print("Skipped sheets:")
         for item in skipped:
             print(f"  - {item}")
-    print("\n现在刷新 Web 页面即可看到新数据集。")
+    print("\nRefresh the web page to see the imported datasets.")
     return 0
 
 
