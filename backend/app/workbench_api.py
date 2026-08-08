@@ -12,6 +12,7 @@ from .auth import require_user
 from .database import get_db
 from .models import Dataset, DatasetField, DatasetRecord, KnowledgeBase, User
 from .schemas import WorkbenchSaveRequest
+from .standard_registry import STANDARD_LINKS, STANDARD_REGISTRY
 
 router = APIRouter(prefix="/api/workbench", tags=["workbench"])
 
@@ -69,7 +70,7 @@ def normalize_value(value):
 
 def safe_name_piece(value) -> str:
     text = normalize_value(value)
-    text = re.sub(r'[\\/:*?"<>|]+', '-', text)
+    text = re.sub(r'[\\/:*?"<>|]+', "-", text)
     text = re.sub(r"\s+", " ", text).strip(" .-")
     return (text or "未填写")[:48]
 
@@ -145,28 +146,10 @@ def save_workbench_result(
         rows.append(result_row("输入条件", label, snapshot.get(key), unit, "用户输入", "已保存"))
 
     for item in body.geometry_results:
-        rows.append(
-            result_row(
-                "零件几何参数",
-                item.name,
-                item.value,
-                item.unit or "-",
-                item.source or "-",
-                item.status or "待确认",
-            )
-        )
+        rows.append(result_row("零件几何参数", item.name, item.value, item.unit or "-", item.source or "-", item.status or "待确认"))
 
     for item in body.assembly_results:
-        rows.append(
-            result_row(
-                "装配/接口参数",
-                item.name,
-                item.value,
-                item.unit or "-",
-                item.source or "-",
-                item.status or "待确认",
-            )
-        )
+        rows.append(result_row("装配/接口参数", item.name, item.value, item.unit or "-", item.source or "-", item.status or "待确认"))
 
     db.bulk_save_objects([DatasetRecord(dataset_id=dataset.id, data=row) for row in rows])
     dataset.record_count = len(rows)
@@ -183,3 +166,111 @@ def save_workbench_result(
         "record_count": dataset.record_count,
         "saved_at": now.strftime("%Y-%m-%d %H:%M:%S"),
     }
+
+
+def _result_rows(db: Session, dataset_id: int):
+    rows = db.scalars(select(DatasetRecord).where(DatasetRecord.dataset_id == dataset_id).order_by(DatasetRecord.id.asc())).all()
+    return [r.data or {} for r in rows]
+
+
+def _group_result(rows: list[dict]) -> dict:
+    grouped = {"保存信息": [], "输入条件": [], "零件几何参数": [], "装配/接口参数": []}
+    for row in rows:
+        section = row.get("SECTION", "其他")
+        grouped.setdefault(section, []).append({
+            "name": row.get("PARAMETER", "-"),
+            "value": row.get("VALUE", "-"),
+            "unit": row.get("UNIT", "-"),
+            "source": row.get("SOURCE", "-"),
+            "status": row.get("STATUS", "-"),
+        })
+    snapshot = {item["name"]: item["value"] for item in grouped.get("输入条件", [])}
+    saved = grouped.get("保存信息", [])
+    saved_at = next((x["value"] for x in saved if x["name"] == "保存时间"), None)
+    return {"snapshot": snapshot, "saved_at": saved_at, "geometry_results": grouped.get("零件几何参数", []), "assembly_results": grouped.get("装配/接口参数", []), "save_info": saved}
+
+
+@router.get("/results")
+def list_workbench_results(keyword: str = "", nps: str = "", pressure_class: str = "", leakage_level: str = "", sort: str = "newest", db: Session = Depends(get_db)):
+    kb = db.scalar(select(KnowledgeBase).where(KnowledgeBase.code == RESULT_KB_CODE))
+    if not kb:
+        return {"total": 0, "rows": []}
+    datasets = db.scalars(select(Dataset).where(Dataset.knowledge_base_id == kb.id).order_by(Dataset.updated_at.desc())).all()
+    rows = []
+    for dataset in datasets:
+        grouped = _group_result(_result_rows(db, dataset.id))
+        snapshot = grouped["snapshot"]
+        name = dataset.name or ""
+        if keyword and keyword.lower() not in name.lower(): continue
+        if nps and nps.lower() not in str(snapshot.get("公称口径", "")).lower(): continue
+        if pressure_class and pressure_class.lower() not in str(snapshot.get("压力等级", "")).lower(): continue
+        if leakage_level and leakage_level.lower() not in str(snapshot.get("泄漏等级", "")).lower(): continue
+        all_results = grouped["geometry_results"] + grouped["assembly_results"]
+        pending = sum(1 for x in all_results if not x["value"] or x["value"] == "-" or re.search(r"待|缺失|错误", f'{x["value"]} {x["status"]}'))
+        rows.append({
+            "id": dataset.id, "name": dataset.name, "nps": snapshot.get("公称口径", "-"), "pressure_class": snapshot.get("压力等级", "-"),
+            "leakage_level": snapshot.get("泄漏等级", "-"), "medium": snapshot.get("介质", "-"), "design_pressure": snapshot.get("设计压力", "-"),
+            "design_temperature": snapshot.get("设计温度", "-"), "saved_at": grouped["saved_at"] or dataset.updated_at.strftime("%Y-%m-%d %H:%M:%S"),
+            "record_count": dataset.record_count, "geometry_count": len(grouped["geometry_results"]), "assembly_count": len(grouped["assembly_results"]), "pending_count": pending,
+        })
+    if sort == "oldest": rows.sort(key=lambda x: x["saved_at"])
+    elif sort == "nps": rows.sort(key=lambda x: x["nps"])
+    elif sort == "pressure": rows.sort(key=lambda x: x["pressure_class"])
+    return {"total": len(rows), "rows": rows}
+
+
+@router.get("/results/{dataset_id}")
+def workbench_result_detail(dataset_id: int, db: Session = Depends(get_db)):
+    kb = db.scalar(select(KnowledgeBase).where(KnowledgeBase.code == RESULT_KB_CODE))
+    dataset = db.get(Dataset, dataset_id)
+    if not kb or not dataset or dataset.knowledge_base_id != kb.id:
+        raise HTTPException(404, "设计成果不存在")
+    grouped = _group_result(_result_rows(db, dataset_id))
+    return {"id": dataset.id, "name": dataset.name, "record_count": dataset.record_count, "saved_at": grouped["saved_at"] or dataset.updated_at.strftime("%Y-%m-%d %H:%M:%S"), **grouped}
+
+
+def _standard_row(item: dict, index: int, link_count: int):
+    return {**item, "id": index + 1, "link_count": link_count}
+
+
+@router.get("/standards")
+def list_standards(keyword: str = "", system: str = "", data_status: str = "", sort: str = "code", db: Session = Depends(get_db)):
+    links_by_code = {}
+    for link in STANDARD_LINKS:
+        links_by_code.setdefault(link["standard_code"], []).append(link)
+    rows = []
+    for idx, item in enumerate(STANDARD_REGISTRY):
+        if keyword and keyword.lower() not in f'{item["code"]} {item["title"]} {item["target_parts"]} {item["key_fields"]}'.lower(): continue
+        if system and item["system"] != system: continue
+        if data_status and item["data_status"] != data_status: continue
+        rows.append(_standard_row(item, idx, len(links_by_code.get(item["code"], []))))
+    if sort == "system": rows.sort(key=lambda x: (x["system"], x["code"]))
+    elif sort == "status":
+        order = {"已录入": 0, "部分": 1, "待核验": 2, "待确认": 3, "待授权": 4, "待导入": 5}
+        rows.sort(key=lambda x: (order.get(x["data_status"], 9), x["code"]))
+    else: rows.sort(key=lambda x: x["code"])
+    return {"total": len(rows), "systems": sorted({x["system"] for x in STANDARD_REGISTRY}), "statuses": sorted({x["data_status"] for x in STANDARD_REGISTRY}), "rows": rows}
+
+
+@router.get("/standards/{standard_id}")
+def standard_detail(standard_id: int, db: Session = Depends(get_db)):
+    if standard_id < 1 or standard_id > len(STANDARD_REGISTRY): raise HTTPException(404, "标准不存在")
+    item = STANDARD_REGISTRY[standard_id - 1]
+    links = [x for x in STANDARD_LINKS if x["standard_code"] == item["code"]]
+    link_payload = []
+    for link in links:
+        dataset = db.scalar(select(Dataset).where(Dataset.name == link["dataset_name"]).order_by(Dataset.updated_at.desc()))
+        payload = {**link, "dataset_id": dataset.id if dataset else None, "dataset_exists": bool(dataset), "fields": [], "rows": []}
+        if dataset:
+            fields = db.scalars(select(DatasetField).where(DatasetField.dataset_id == dataset.id).order_by(DatasetField.order_no)).all()
+            selected = [f for f in fields if f.field_name in link["field_names"] or f.source_name in link["field_names"]]
+            payload["fields"] = [{
+                "field_code": f.field_code, "field_name": f.field_name, "unit": f.unit,
+                "description": getattr(f, "description", None) or f"字段“{f.field_name}”用于该参数表的规格查询、计算或校核。"
+            } for f in selected]
+            records = db.scalars(select(DatasetRecord).where(DatasetRecord.dataset_id == dataset.id).order_by(DatasetRecord.id.asc()).limit(80)).all()
+            codes = [f.field_code for f in selected]
+            payload["rows"] = [{"_id": r.id, **{code: (r.data or {}).get(code) for code in codes}} for r in records]
+        link_payload.append(payload)
+    return {**item, "id": standard_id, "links": link_payload, "linked_dataset_count": sum(1 for x in link_payload if x["dataset_exists"])}
+'''\len(workbench_content)
