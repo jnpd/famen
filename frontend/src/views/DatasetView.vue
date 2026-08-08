@@ -156,7 +156,27 @@ async function removeRow(row) {
     await loadDetail(); await loadRows()
   } catch (e) { if (e !== 'cancel') console.warn(e) }
 }
-function exportExcel() { window.open(`/api/datasets/${route.params.id}/export`, '_blank') }
+async function exportExcel() {
+  try {
+    const response = await http.get(`/datasets/${route.params.id}/export`, { responseType: 'blob' })
+    const disposition = response.headers['content-disposition'] || ''
+    let filename = `${detail.value.name || '参数数据'}.xlsx`
+    const utf8Match = disposition.match(/filename\*=UTF-8''([^;]+)/i)
+    const normalMatch = disposition.match(/filename=\"?([^\";]+)\"?/i)
+    if (utf8Match?.[1]) filename = decodeURIComponent(utf8Match[1])
+    else if (normalMatch?.[1]) filename = normalMatch[1]
+    const url = URL.createObjectURL(response.data)
+    const a = document.createElement('a')
+    a.href = url
+    a.download = filename
+    document.body.appendChild(a)
+    a.click()
+    a.remove()
+    URL.revokeObjectURL(url)
+  } catch (e) {
+    ElMessage.error(e.message || '导出失败')
+  }
+}
 
 watch(() => route.params.id, load)
 onMounted(load)

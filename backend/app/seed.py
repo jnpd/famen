@@ -1,6 +1,8 @@
+import os
 from sqlalchemy import select
 from sqlalchemy.orm import Session
-from .models import Dataset, DatasetField, DatasetRecord, KnowledgeBase
+from .auth import hash_password
+from .models import Dataset, DatasetField, DatasetRecord, KnowledgeBase, User
 
 LIBRARIES = [
     ("基础字典库", "dictionary", "dictionary", "系统统一口径、压力等级、类型、材料等基础字典", "green"),
@@ -35,7 +37,27 @@ def create_dataset(db: Session, kb: KnowledgeBase, name: str, fields: list[tuple
     ds.field_count = len(fields)
 
 
+def ensure_admin(db: Session):
+    username = os.getenv("VALVE_ADMIN_USERNAME", "admin")
+    display_name = os.getenv("VALVE_ADMIN_DISPLAY_NAME", "管理员")
+    password = os.getenv("VALVE_ADMIN_PASSWORD", "Admin@123456")
+    user = db.scalar(select(User).where(User.username == username))
+    if user:
+        return
+    password_hash, password_salt = hash_password(password)
+    db.add(User(
+        username=username,
+        display_name=display_name,
+        role="admin",
+        password_hash=password_hash,
+        password_salt=password_salt,
+        enabled=True,
+    ))
+    db.commit()
+
+
 def seed(db: Session):
+    ensure_admin(db)
     existing = db.scalar(select(KnowledgeBase.id).limit(1))
     if not existing:
         for name, code, typ, desc, accent in LIBRARIES:

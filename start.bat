@@ -3,7 +3,7 @@ setlocal enabledelayedexpansion
 cd /d %~dp0
 
 echo ========================================
-echo  Valve Knowledge Base V1
+echo  Valve Knowledge Base V1.1
 echo  Vue3 + FastAPI + SQLite
 echo ========================================
 echo.
@@ -59,6 +59,7 @@ echo.
 echo Web : http://localhost:5173
 echo API : http://127.0.0.1:8000/docs
 echo DB  : backend\data\valve_knowledge.db
+echo Login: admin / Admin@123456 ^(first startup^)
 echo.
 timeout /t 4 /nobreak >nul
 start "" http://localhost:5173

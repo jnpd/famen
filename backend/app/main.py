@@ -8,22 +8,32 @@ from pathlib import Path
 from typing import Any
 
 import pandas as pd
-from fastapi import Depends, FastAPI, File, HTTPException, UploadFile
+from fastapi import Depends, FastAPI, File, HTTPException, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, JSONResponse
 from sqlalchemy import String, and_, cast, func, or_, select
 from sqlalchemy.orm import Session, selectinload
 
 from .database import Base, SessionLocal, engine, get_db
-from .models import Dataset, DatasetField, DatasetRecord, ImportJob, KnowledgeBase
+from .models import Dataset, DatasetField, DatasetRecord, ImportJob, KnowledgeBase, User, UserSession
 from .schemas import (
     DatasetQuery,
     ImportCommitRequest,
     ImportPreviewRequest,
     KnowledgeBaseCreate,
+    LoginRequest,
+    PasswordChangeRequest,
     RecordUpdate,
 )
 from .seed import seed
+from .auth import (
+    authenticate_token,
+    create_session,
+    current_token_hash,
+    hash_password,
+    require_user,
+    verify_password,
+)
 from .services.excel_service import (
     frame_to_json_records,
     list_sheets,
@@ -37,11 +47,12 @@ UPLOAD_DIR = BASE_DIR / "uploads"
 UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
 EXPORT_DIR = BASE_DIR / "data" / "exports"
 EXPORT_DIR.mkdir(parents=True, exist_ok=True)
+MAX_UPLOAD_BYTES = 20 * 1024 * 1024
 
 app = FastAPI(title="阀门工程知识库 API", version="1.0.0")
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:5173", "http://127.0.0.1:5173", "*"],
+    allow_origins=["http://localhost:5173", "http://127.0.0.1:5173"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -53,6 +64,99 @@ def startup():
     Base.metadata.create_all(bind=engine)
     with SessionLocal() as db:
         seed(db)
+
+
+PUBLIC_API_PATHS = {"/api/health", "/api/auth/login"}
+
+
+@app.middleware("http")
+async def protect_api(request: Request, call_next):
+    path = request.url.path
+    if request.method != "OPTIONS" and path.startswith("/api/") and path not in PUBLIC_API_PATHS:
+        authorization = request.headers.get("Authorization", "")
+        if not authorization.lower().startswith("bearer "):
+            return JSONResponse(status_code=401, content={"detail": "请先登录"})
+        raw_token = authorization.split(" ", 1)[1].strip()
+        if not raw_token:
+            return JSONResponse(status_code=401, content={"detail": "请先登录"})
+        try:
+            with SessionLocal() as db:
+                user = authenticate_token(db, raw_token)
+                request.state.user_id = user.id
+                request.state.username = user.username
+        except HTTPException as exc:
+            return JSONResponse(status_code=exc.status_code, content={"detail": exc.detail})
+    return await call_next(request)
+
+
+def user_out(user: User):
+    return {
+        "id": user.id,
+        "username": user.username,
+        "display_name": user.display_name,
+        "role": user.role,
+        "enabled": user.enabled,
+        "last_login_at": dt(user.last_login_at),
+    }
+
+
+@app.post("/api/auth/login")
+def login(body: LoginRequest, db: Session = Depends(get_db)):
+    user = db.scalar(select(User).where(User.username == body.username.strip()))
+    if not user or not verify_password(body.password, user.password_hash, user.password_salt):
+        raise HTTPException(status_code=401, detail="用户名或密码错误")
+    if not user.enabled:
+        raise HTTPException(status_code=403, detail="用户已停用")
+    now = datetime.now()
+    expired = db.scalars(select(UserSession).where(UserSession.expires_at <= now)).all()
+    for item in expired:
+        db.delete(item)
+    raw_token, session = create_session(db, user)
+    user.last_login_at = now
+    db.commit()
+    return {
+        "access_token": raw_token,
+        "token_type": "bearer",
+        "expires_at": dt(session.expires_at),
+        "user": user_out(user),
+    }
+
+
+@app.get("/api/auth/me")
+def me(user: User = Depends(require_user)):
+    return user_out(user)
+
+
+@app.post("/api/auth/logout")
+def logout(current_hash: str = Depends(current_token_hash), db: Session = Depends(get_db)):
+    session = db.scalar(select(UserSession).where(UserSession.token_hash == current_hash))
+    if session:
+        db.delete(session)
+        db.commit()
+    return {"ok": True}
+
+
+@app.post("/api/auth/change-password")
+def change_password(
+    body: PasswordChangeRequest,
+    user: User = Depends(require_user),
+    current_hash: str = Depends(current_token_hash),
+    db: Session = Depends(get_db),
+):
+    if not verify_password(body.old_password, user.password_hash, user.password_salt):
+        raise HTTPException(status_code=400, detail="原密码不正确")
+    if body.old_password == body.new_password:
+        raise HTTPException(status_code=400, detail="新密码不能与原密码相同")
+    password_hash, password_salt = hash_password(body.new_password)
+    user.password_hash = password_hash
+    user.password_salt = password_salt
+    # 修改密码后保留当前登录，注销其他设备会话。
+    sessions = db.scalars(select(UserSession).where(UserSession.user_id == user.id)).all()
+    for session in sessions:
+        if session.token_hash != current_hash:
+            db.delete(session)
+    db.commit()
+    return {"ok": True}
 
 
 def dt(v):
@@ -298,8 +402,22 @@ async def inspect_excel(file: UploadFile = File(...), db: Session = Depends(get_
     if suffix not in {".xlsx", ".xls"}:
         raise HTTPException(400, "仅支持 .xlsx / .xls 文件")
     stored = UPLOAD_DIR / f"{uuid.uuid4().hex}{suffix}"
-    with stored.open("wb") as out:
-        shutil.copyfileobj(file.file, out)
+    size = 0
+    try:
+        with stored.open("wb") as out:
+            while True:
+                chunk = await file.read(1024 * 1024)
+                if not chunk:
+                    break
+                size += len(chunk)
+                if size > MAX_UPLOAD_BYTES:
+                    raise HTTPException(status_code=413, detail="Excel 文件不能超过 20MB")
+                out.write(chunk)
+    except Exception:
+        stored.unlink(missing_ok=True)
+        raise
+    finally:
+        await file.close()
     job = ImportJob(filename=file.filename or stored.name, stored_path=str(stored), status="INSPECTING")
     db.add(job)
     db.commit()
