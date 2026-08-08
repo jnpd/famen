@@ -15,6 +15,9 @@
         <router-link class="nav-item" :class="{ active: route.name === 'dashboard' }" to="/">
           <el-icon><House /></el-icon><span>知识库总览</span>
         </router-link>
+        <router-link class="nav-item" :class="{ active: route.name === 'workbench' }" to="/workbench">
+          <el-icon><Operation /></el-icon><span>参数生成工作台</span>
+        </router-link>
 
         <div class="nav-section">基础数据</div>
         <button
@@ -100,20 +103,11 @@
 
     <el-dialog v-model="passwordVisible" title="修改登录密码" width="430px" :close-on-click-modal="false">
       <el-form label-position="top">
-        <el-form-item label="当前密码">
-          <el-input v-model="passwordForm.old_password" type="password" show-password autocomplete="current-password" />
-        </el-form-item>
-        <el-form-item label="新密码">
-          <el-input v-model="passwordForm.new_password" type="password" show-password autocomplete="new-password" placeholder="至少 8 位" />
-        </el-form-item>
-        <el-form-item label="确认新密码">
-          <el-input v-model="passwordForm.confirm_password" type="password" show-password autocomplete="new-password" />
-        </el-form-item>
+        <el-form-item label="当前密码"><el-input v-model="passwordForm.old_password" type="password" show-password autocomplete="current-password" /></el-form-item>
+        <el-form-item label="新密码"><el-input v-model="passwordForm.new_password" type="password" show-password autocomplete="new-password" placeholder="至少 8 位" /></el-form-item>
+        <el-form-item label="确认新密码"><el-input v-model="passwordForm.confirm_password" type="password" show-password autocomplete="new-password" /></el-form-item>
       </el-form>
-      <template #footer>
-        <el-button @click="passwordVisible = false">取消</el-button>
-        <el-button type="primary" :loading="passwordSaving" @click="changePassword">保存新密码</el-button>
-      </template>
+      <template #footer><el-button @click="passwordVisible = false">取消</el-button><el-button type="primary" :loading="passwordSaving" @click="changePassword">保存新密码</el-button></template>
     </el-dialog>
   </div>
 </template>
@@ -132,6 +126,7 @@ import {
   House,
   Key,
   Menu,
+  Operation,
   QuestionFilled,
   Search,
   Setting,
@@ -156,6 +151,7 @@ const avatarText = computed(() => (auth.displayName || 'A').trim().slice(0, 1).t
 
 const pageTitle = computed(() => {
   if (route.name === 'dashboard') return '知识库总览'
+  if (route.name === 'workbench') return '参数生成工作台'
   if (route.name === 'excelImport') return 'Excel批量导入'
   if (route.name === 'imports') return '导入记录'
   if (route.name === 'dataset') return '参数数据详情'
@@ -170,14 +166,9 @@ async function loadLibraries() {
   try {
     const { data } = await http.get('/knowledge-bases')
     libraries.value = data
-  } catch (e) {
-    console.error(e)
-  }
+  } catch (e) { console.error(e) }
 }
-
-function goLibrary(id) {
-  router.push({ name: 'library', params: { id } })
-}
+function goLibrary(id) { router.push({ name: 'library', params: { id } }) }
 
 async function handleUserCommand(command) {
   if (command === 'password') {
@@ -191,38 +182,20 @@ async function handleUserCommand(command) {
       await auth.logout()
       ElMessage.success('已退出登录')
       router.replace('/login')
-    } catch (e) {
-      if (e !== 'cancel') console.warn(e)
-    }
+    } catch (e) { if (e !== 'cancel') console.warn(e) }
   }
 }
 
 async function changePassword() {
-  if (!passwordForm.old_password || !passwordForm.new_password) {
-    ElMessage.warning('请填写当前密码和新密码')
-    return
-  }
-  if (passwordForm.new_password.length < 8) {
-    ElMessage.warning('新密码至少 8 位')
-    return
-  }
-  if (passwordForm.new_password !== passwordForm.confirm_password) {
-    ElMessage.warning('两次输入的新密码不一致')
-    return
-  }
+  if (!passwordForm.old_password || !passwordForm.new_password) { ElMessage.warning('请填写当前密码和新密码'); return }
+  if (passwordForm.new_password.length < 8) { ElMessage.warning('新密码至少 8 位'); return }
+  if (passwordForm.new_password !== passwordForm.confirm_password) { ElMessage.warning('两次输入的新密码不一致'); return }
   passwordSaving.value = true
   try {
-    await http.post('/auth/change-password', {
-      old_password: passwordForm.old_password,
-      new_password: passwordForm.new_password
-    })
+    await http.post('/auth/change-password', { old_password: passwordForm.old_password, new_password: passwordForm.new_password })
     passwordVisible.value = false
     ElMessage.success('密码修改成功')
-  } catch (e) {
-    ElMessage.error(e.message)
-  } finally {
-    passwordSaving.value = false
-  }
+  } catch (e) { ElMessage.error(e.message) } finally { passwordSaving.value = false }
 }
 
 onMounted(async () => {
