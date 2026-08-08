@@ -62,8 +62,8 @@ class WorkbenchResultItem(BaseModel):
 class WorkbenchSaveRequest(BaseModel):
     name: str | None = Field(default=None, max_length=180)
     input_snapshot: dict[str, Any]
-    geometry_results: list[WorkbenchResultItem] = []
-    assembly_results: list[WorkbenchResultItem] = []
+    geometry_results: list[WorkbenchResultItem] = Field(default_factory=list)
+    assembly_results: list[WorkbenchResultItem] = Field(default_factory=list)
 
 
 class LoginRequest(BaseModel):
