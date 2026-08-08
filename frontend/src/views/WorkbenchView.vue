@@ -41,7 +41,7 @@
 
           <el-form-item label="设计温度"><el-input v-model="form.design_temperature"><template #append>℃</template></el-input></el-form-item>
           <el-form-item label="泄漏等级">
-            <el-select v-model="form.leakage_level" filterable allow-create default-first-option placeholder="请选择或输入泄漏等级" style="width:100%">
+            <el-select v-model="form.leakage_level" filterable allow-create default-first-option clearable placeholder="请选择或输入泄漏等级" style="width:100%">
               <el-option v-for="x in options.leakage" :key="x" :label="x" :value="x" />
             </el-select>
           </el-form-item>
@@ -277,9 +277,11 @@ async function loadValues(dsName, fieldName) {
 async function loadLeakageValues() {
   const x = await query('泄漏等级表', {}, 200, false)
   if (!x.detail) return []
-  const fields = x.detail.fields || []
-  const target = fields.find(f => /(泄漏|泄露).*(等级|级别|rate|class)/i.test(`${f.field_name} ${f.source_name}`))
-    || fields.find(f => /(等级|级别|rate|class)/i.test(`${f.field_name} ${f.source_name}`))
+  const preferred = ['用户输入示例', '泄漏等级', '泄露等级', '等级/叫法', '等级', '级别']
+  let target = preferred.map(name => field(x.detail, name)).find(Boolean)
+  if (!target) {
+    target = (x.detail.fields || []).find(f => /(泄漏|泄露|等级|级别|rate|class)/i.test(`${f.field_name} ${f.source_name}`))
+  }
   if (!target) return []
   return [...new Set(x.rows.map(r => r[target.field_code]).filter(Boolean).map(String))]
 }
@@ -299,10 +301,9 @@ async function loadOptions() {
   options.endConnection=d
   options.ballMaterial=e
   options.leakage=f
-  if (!form.leakage_level && f.length) form.leakage_level = f[0]
 }
 
-function resetForm() { Object.assign(form, defaults); if (options.leakage.length) form.leakage_level = options.leakage[0] }
+function resetForm() { Object.assign(form, defaults) }
 function openSavedDataset() { if (lastSaved.value?.dataset_id) router.push({ name:'dataset', params:{ id:lastSaved.value.dataset_id } }) }
 function openResultLibrary() { if (lastSaved.value?.knowledge_base_id) router.push({ name:'library', params:{ id:lastSaved.value.knowledge_base_id } }) }
 
