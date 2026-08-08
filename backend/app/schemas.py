@@ -59,11 +59,36 @@ class WorkbenchResultItem(BaseModel):
     status: str | None = None
 
 
+class WorkbenchCalculationItem(BaseModel):
+    step: str
+    title: str
+    calculation: str | None = None
+    part_output: str | None = None
+    part_target: str | None = None
+    assembly_output: str | None = None
+    assembly_target: str | None = None
+    source: str | None = None
+    source_type: str | None = None
+    status: str | None = None
+
+
+class WorkbenchSwMappingItem(BaseModel):
+    parameter: str
+    value: Any = None
+    unit: str | None = None
+    target_file: str | None = None
+    variable: str | None = None
+    feature: str | None = None
+    status: str | None = None
+
+
 class WorkbenchSaveRequest(BaseModel):
     name: str | None = Field(default=None, max_length=180)
     input_snapshot: dict[str, Any]
     geometry_results: list[WorkbenchResultItem] = Field(default_factory=list)
     assembly_results: list[WorkbenchResultItem] = Field(default_factory=list)
+    calculation_results: list[WorkbenchCalculationItem] = Field(default_factory=list)
+    sw_mappings: list[WorkbenchSwMappingItem] = Field(default_factory=list)
 
 
 class LoginRequest(BaseModel):
