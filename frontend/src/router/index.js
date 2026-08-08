@@ -7,6 +7,10 @@ import DatasetView from '../views/DatasetView.vue'
 import ImportHistoryView from '../views/ImportHistoryView.vue'
 import ExcelImportView from '../views/ExcelImportView.vue'
 import LoginView from '../views/LoginView.vue'
+import DesignResultsView from '../views/DesignResultsView.vue'
+import DesignResultDetailView from '../views/DesignResultDetailView.vue'
+import StandardsView from '../views/StandardsView.vue'
+import StandardDetailView from '../views/StandardDetailView.vue'
 
 const router = createRouter({
   history: createWebHistory(),
@@ -19,6 +23,10 @@ const router = createRouter({
       children: [
         { path: '', name: 'dashboard', component: DashboardView },
         { path: 'workbench', name: 'workbench', component: WorkbenchView },
+        { path: 'design-results', name: 'designResults', component: DesignResultsView },
+        { path: 'design-results/:id', name: 'designResultDetail', component: DesignResultDetailView },
+        { path: 'standards', name: 'standards', component: StandardsView },
+        { path: 'standards/:id', name: 'standardDetail', component: StandardDetailView },
         { path: 'libraries/:id', name: 'library', component: LibraryView },
         { path: 'datasets/:id', name: 'dataset', component: DatasetView },
         { path: 'excel-import', name: 'excelImport', component: ExcelImportView },
