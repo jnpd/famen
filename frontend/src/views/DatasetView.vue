@@ -1,5 +1,11 @@
 <template>
   <div class="dataset-page" v-loading="loading">
+    <div class="page-back-row">
+      <el-button text class="back-button" @click="goBack">
+        <el-icon><ArrowLeft /></el-icon>返回所属知识库
+      </el-button>
+    </div>
+
     <div class="dataset-head">
       <div>
         <div class="breadcrumbs">{{ detail.knowledge_base?.name }} / 参数数据</div>
@@ -93,13 +99,14 @@
 
 <script setup>
 import { computed, onMounted, reactive, ref, watch } from 'vue'
-import { useRoute } from 'vue-router'
-import { DocumentAdd, Download } from '@element-plus/icons-vue'
+import { useRoute, useRouter } from 'vue-router'
+import { ArrowLeft, DocumentAdd, Download } from '@element-plus/icons-vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import http from '../api/http.js'
 import ImportDrawer from '../components/ImportDrawer.vue'
 
 const route = useRoute()
+const router = useRouter()
 const detail = ref({ fields: [] })
 const rows = ref([])
 const total = ref(0)
@@ -128,6 +135,12 @@ async function loadRows() {
 async function load() {
   loading.value = true
   try { await loadDetail(); await loadRows() } finally { loading.value = false }
+}
+
+function goBack() {
+  const kbId = detail.value.knowledge_base?.id
+  if (kbId) router.push({ name: 'library', params: { id: kbId } })
+  else router.push({ name: 'dashboard' })
 }
 
 function resetPageAndLoad() { query.page = 1; loadRows() }
@@ -161,3 +174,9 @@ function exportExcel() { window.open(`/api/datasets/${route.params.id}/export`, 
 watch(() => route.params.id, load)
 onMounted(load)
 </script>
+
+<style scoped>
+.page-back-row { margin-bottom: 10px; }
+.back-button { padding-left: 2px; color: #5f7188; }
+.back-button:hover { color: #1262df; }
+</style>
