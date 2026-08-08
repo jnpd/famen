@@ -51,6 +51,21 @@ class RecordUpdate(BaseModel):
     data: dict[str, Any]
 
 
+class WorkbenchResultItem(BaseModel):
+    name: str
+    value: Any = None
+    unit: str | None = None
+    source: str | None = None
+    status: str | None = None
+
+
+class WorkbenchSaveRequest(BaseModel):
+    name: str | None = Field(default=None, max_length=180)
+    input_snapshot: dict[str, Any]
+    geometry_results: list[WorkbenchResultItem] = []
+    assembly_results: list[WorkbenchResultItem] = []
+
+
 class LoginRequest(BaseModel):
     username: str = Field(min_length=1, max_length=80)
     password: str = Field(min_length=1, max_length=200)
