@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import argparse
+import re
 import sys
+from collections import Counter
 from pathlib import Path
 
 BASE_DIR = Path(__file__).resolve().parents[1]
@@ -22,6 +24,25 @@ from app.services.excel_service import (
 
 
 METADATA_WORDS = ("目录", "说明", "总览", "汇总", "索引")
+UNIT_COLUMN_NAMES = {"单位", "unit", "units", "uom"}
+HEADER_UNIT_RE = re.compile(
+    r"(?:\(|（|\[|【)\s*(mm|cm|m|in|inch|mpa|kpa|pa|bar|n|kn|n·m|nm|℃|°c|°f|个|%)\s*(?:\)|）|\]|】)",
+    re.I,
+)
+DIMENSION_HINTS = (
+    "直径", "外径", "内径", "孔径", "通径", "半径", "长度", "深度", "厚度", "高度", "宽度",
+    "中心圆", "壁厚", "间隙", "截面", "槽深", "槽宽", "导角", "凸台", "凹槽", "轴径", "键b", "键宽",
+    "键高", "有效长度", "面对面", "端到端", "毫米", "diameter", "radius", "length", "depth", "thickness",
+    "width", "height", "bore", "wall", "circle",
+)
+NON_DIMENSION_HINTS = (
+    "数量", "个数", "牙数", "等级", "状态", "来源", "材料", "类型", "型式", "型号", "规格", "编号", "代码",
+    "备注", "说明", "是否", "名称", "pressure", "temperature", "count", "status", "material", "type", "model",
+)
+EXACT_UNIT_HINTS = {
+    "nps数值": "in",
+    "毫米参考": "mm",
+}
 
 
 def recommend_library_code(sheet_name: str, default_code: str = "parameter") -> str:
@@ -66,14 +87,114 @@ def make_unique_codes(columns: list[dict]) -> list[dict]:
     return result
 
 
+def normalize_unit(value) -> str | None:
+    if value is None:
+        return None
+    text = str(value).strip()
+    if not text or text.lower() in {"nan", "none", "-", "/", "待定", "待确认"}:
+        return None
+    aliases = {
+        "毫米": "mm",
+        "millimeter": "mm",
+        "millimetre": "mm",
+        "英寸": "in",
+        "inch": "in",
+        "inches": "in",
+        "mpa": "MPa",
+        "kpa": "kPa",
+        "pa": "Pa",
+        "n": "N",
+        "kn": "kN",
+        "nm": "N·m",
+        "n·m": "N·m",
+        "°c": "℃",
+        "c": "℃",
+    }
+    return aliases.get(text.lower(), text)
+
+
+def most_common_unit(values) -> str | None:
+    units = [normalize_unit(v) for v in values]
+    units = [u for u in units if u]
+    if not units:
+        return None
+    counts = Counter(units)
+    unit, count = counts.most_common(1)[0]
+    # Static DatasetField.unit is safe only when one unit dominates the column.
+    if len(units) >= 2 and count / len(units) < 0.8:
+        return None
+    return unit
+
+
+def unit_from_header(name: str) -> str | None:
+    text = str(name or "").strip()
+    exact = EXACT_UNIT_HINTS.get(text.lower().replace(" ", ""))
+    if exact:
+        return exact
+    match = HEADER_UNIT_RE.search(text)
+    return normalize_unit(match.group(1)) if match else None
+
+
+def looks_like_dimension(name: str) -> bool:
+    text = str(name or "").strip().lower()
+    if any(word.lower() in text for word in NON_DIMENSION_HINTS):
+        return False
+    return any(word.lower() in text for word in DIMENSION_HINTS)
+
+
+def infer_column_units(frame, columns: list[dict]) -> list[dict]:
+    """Infer field metadata units without changing row data.
+
+    Priority: explicit unit in header > adjacent Unit column > conservative
+    engineering-dimension fallback. Unknown units stay empty rather than guessing.
+    """
+    result = [dict(item) for item in columns]
+    index_by_source = {str(item.get("source_name")): idx for idx, item in enumerate(result)}
+
+    # 1) Explicit unit embedded in the header, e.g. Diameter(mm).
+    for item in result:
+        if not item.get("unit"):
+            item["unit"] = unit_from_header(item.get("field_name") or item.get("source_name")) or ""
+
+    # 2) A stable Unit column usually describes the immediately preceding value column.
+    for pos, col in enumerate(list(frame.columns)):
+        col_name = str(col).strip().lower()
+        if col_name not in UNIT_COLUMN_NAMES:
+            continue
+        unit = most_common_unit(frame[col].head(100).tolist())
+        if not unit or pos <= 0:
+            continue
+        previous = str(frame.columns[pos - 1])
+        target_idx = index_by_source.get(previous)
+        if target_idx is None:
+            continue
+        # Do not assign one static unit to generic row-wise value tables where units vary per row.
+        prev_name = str(result[target_idx].get("field_name") or previous).strip().lower()
+        if prev_name in {"取值", "值", "示例值", "value", "sample value"}:
+            continue
+        if not result[target_idx].get("unit"):
+            result[target_idx]["unit"] = unit
+
+    # 3) Conservative fallback for mechanical geometry tables. This intentionally
+    # avoids pressure/temperature/count/status fields.
+    for item in result:
+        if item.get("unit"):
+            continue
+        name = item.get("field_name") or item.get("source_name") or ""
+        if looks_like_dimension(name):
+            item["unit"] = "mm"
+
+    return result
+
+
 def import_dataset(db, workbook: Path, sheet_name: str, analysis: dict, kb: KnowledgeBase, replace: bool) -> tuple[str, int]:
     header_row = analysis.get("header_row")
 
-    # Keep this call compatible with both the old and new excel_service.py.
-    # The structure analysis is already completed above; preview_payload is only
-    # needed here to build dynamic column definitions.
+    # Keep this call compatible with both old and new excel_service.py.
     payload = preview_payload(workbook, sheet_name, header_row)
+    frame = read_frame(workbook, sheet_name, header_row)
     columns = make_unique_codes(payload.get("columns") or [])
+    columns = infer_column_units(frame, columns)
     if not columns:
         return "skip:no-fields", 0
 
@@ -90,7 +211,6 @@ def import_dataset(db, workbook: Path, sheet_name: str, analysis: dict, kb: Know
         db.delete(existing)
         db.flush()
 
-    frame = read_frame(workbook, sheet_name, header_row)
     mappings = [
         {
             "source_name": c["source_name"],
