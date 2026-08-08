@@ -23,7 +23,8 @@ class FieldMapping(BaseModel):
 
 class ImportPreviewRequest(BaseModel):
     sheet_name: str
-    header_row: int = Field(ge=0)
+    # -2 = auto detect, -1 = no header, >=0 = explicit zero-based header row
+    header_row: int = Field(default=-2, ge=-2)
 
 
 class ImportCommitRequest(BaseModel):
@@ -32,7 +33,8 @@ class ImportCommitRequest(BaseModel):
     category: str | None = None
     standard_no: str | None = None
     sheet_name: str
-    header_row: int = Field(ge=0)
+    # -1 = no header, >=0 = confirmed zero-based header row
+    header_row: int = Field(ge=-1)
     mappings: list[FieldMapping]
 
 
