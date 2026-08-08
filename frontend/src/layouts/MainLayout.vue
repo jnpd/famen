@@ -15,6 +15,9 @@
         <router-link class="nav-item" :class="{ active: route.name === 'dashboard' }" to="/">
           <el-icon><House /></el-icon><span>知识库总览</span>
         </router-link>
+        <router-link class="nav-item workbench-nav" :class="{ active: route.name === 'workbench' }" to="/workbench">
+          <el-icon><Operation /></el-icon><span>参数生成工作台</span>
+        </router-link>
 
         <div class="nav-section">基础数据</div>
         <button
@@ -96,6 +99,7 @@ import {
   FolderOpened,
   House,
   Menu,
+  Operation,
   QuestionFilled,
   Search,
   Setting,
@@ -112,6 +116,7 @@ const engineeringLibraries = computed(() => libraries.value.filter(x => x.type !
 
 const pageTitle = computed(() => {
   if (route.name === 'dashboard') return '知识库总览'
+  if (route.name === 'workbench') return '参数生成工作台'
   if (route.name === 'imports') return '导入记录'
   if (route.name === 'dataset') return '参数数据详情'
   if (route.name === 'library') {
@@ -136,3 +141,7 @@ function goLibrary(id) {
 
 onMounted(loadLibraries)
 </script>
+
+<style scoped>
+.workbench-nav { margin-top: 4px; }
+</style>
