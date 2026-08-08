@@ -1,6 +1,7 @@
 import { createRouter, createWebHistory } from 'vue-router'
 import MainLayout from '../layouts/MainLayout.vue'
 import DashboardView from '../views/DashboardView.vue'
+import WorkbenchView from '../views/WorkbenchView.vue'
 import LibraryView from '../views/LibraryView.vue'
 import DatasetView from '../views/DatasetView.vue'
 import ImportHistoryView from '../views/ImportHistoryView.vue'
@@ -17,6 +18,7 @@ const router = createRouter({
       meta: { requiresAuth: true },
       children: [
         { path: '', name: 'dashboard', component: DashboardView },
+        { path: 'workbench', name: 'workbench', component: WorkbenchView },
         { path: 'libraries/:id', name: 'library', component: LibraryView },
         { path: 'datasets/:id', name: 'dataset', component: DatasetView },
         { path: 'excel-import', name: 'excelImport', component: ExcelImportView },
