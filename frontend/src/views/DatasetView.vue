@@ -1,98 +1,18 @@
 <template>
-  <div class="dataset-page" v-loading="loading">
-    <div class="page-back-row">
-      <el-button text class="back-button" @click="goBack">
-        <el-icon><ArrowLeft /></el-icon>返回所属知识库
-      </el-button>
-    </div>
+  <div class="dataset-detail-page" v-loading="loading">
+    <div class="page-back-row"><el-button text class="back-button" @click="goBack"><el-icon><ArrowLeft /></el-icon>返回{{ detail.knowledge_base?.name || '知识库' }}</el-button></div>
+    <div class="detail-hero"><div><div class="eyebrow">{{ detail.knowledge_base?.name || '知识库' }} · 参数数据详情</div><h1>{{ detail.name || '数据集' }}</h1><p>{{ detail.source_file_name || '系统数据' }} <span>·</span> {{ detail.sheet_name || '无 Sheet 信息' }} <span>·</span> 更新于 {{ detail.updated_at || '-' }}</p></div><div class="hero-actions"><el-tag v-if="detail.standard_no" effect="plain">{{ detail.standard_no }}</el-tag><el-button @click="exportExcel"><el-icon><Download /></el-icon>导出Excel</el-button><el-button type="primary" @click="drawer=true"><el-icon><DocumentAdd /></el-icon>继续导入</el-button></div></div>
+    <div class="stat-grid"><div><span>记录</span><b>{{ total.toLocaleString() }}</b><small>当前数据集</small></div><div><span>字段</span><b>{{ detail.fields?.length || 0 }}</b><small>字段定义</small></div><div><span>带单位字段</span><b>{{ unitCount }}</b><small>工程量纲</small></div><div><span>待补齐</span><b class="warn">{{ pendingCount }}</b><small>当前页发现</small></div></div>
 
-    <div class="dataset-head">
-      <div>
-        <div class="breadcrumbs">{{ detail.knowledge_base?.name }} / 参数数据</div>
-        <h1>{{ detail.name }}</h1>
-        <div class="dataset-meta">
-          <el-tag effect="plain">{{ detail.record_count || 0 }} 条</el-tag>
-          <el-tag effect="plain">{{ detail.field_count || 0 }} 字段</el-tag>
-          <span>来源：{{ detail.source_file_name || '手工创建' }}</span>
-          <span>Sheet：{{ detail.sheet_name || '-' }}</span>
-        </div>
-      </div>
-      <div>
-        <el-button @click="exportExcel"><el-icon><Download /></el-icon>导出Excel</el-button>
-        <el-button type="primary" @click="drawer=true"><el-icon><DocumentAdd /></el-icon>继续导入</el-button>
-      </div>
-    </div>
+    <section class="field-card-panel"><div class="section-head"><div><b>字段定义与背后含义</b><span>不要只看“字段名”，这里说明它是什么、单位是什么、用来干什么。</span></div><el-tag effect="plain">{{ detail.fields?.length || 0 }} 字段</el-tag></div><div class="field-definition-grid"><div v-for="field in detail.fields || []" :key="field.id" class="field-definition"><div class="field-top"><b>{{ field.field_name }}</b><em v-if="field.unit">{{ field.unit }}</em></div><div class="field-code">{{ field.field_code }}</div><p>{{ meaning(field.field_name) }}</p></div></div></section>
 
-    <div class="query-card">
-      <div class="query-top">
-        <div class="section-title">参数查询</div>
-        <div class="query-actions">
-          <el-input v-model="query.search" clearable placeholder="搜索任意可检索字段" style="width:260px" @keyup.enter="loadRows" />
-          <el-button type="primary" @click="resetPageAndLoad">搜索</el-button>
-          <el-button @click="resetFilters">重置</el-button>
-        </div>
-      </div>
-      <div class="filter-grid">
-        <div v-for="f in filterFields.slice(0, 6)" :key="f.field_code" class="filter-item">
-          <label>{{ f.field_name }}</label>
-          <el-input v-model="query.filters[f.field_code]" clearable :placeholder="`筛选${f.field_name}`" @keyup.enter="resetPageAndLoad" />
-        </div>
-      </div>
-    </div>
+    <section class="data-card"><div class="data-toolbar"><div><b>规格数据</b><span>支持关键词、字段筛选、排序和分页；状态字段自动用颜色区分。</span></div><el-button text @click="loadRows">刷新</el-button></div>
+      <div class="filter-bar"><el-input v-model="query.search" clearable :prefix-icon="Search" placeholder="搜索任意字段" style="width:250px" @keyup.enter="resetPageAndLoad" /><template v-for="field in filterFields.slice(0,4)" :key="field.field_code"><el-input v-model="query.filters[field.field_code]" clearable :placeholder="field.field_name" style="width:145px" @keyup.enter="resetPageAndLoad" /></template><el-select v-model="query.sort_by" clearable placeholder="排序字段" style="width:145px"><el-option v-for="f in detail.fields || []" :key="f.field_code" :label="f.field_name" :value="f.field_code" /></el-select><el-select v-model="query.sort_order" style="width:88px"><el-option label="升序" value="asc" /><el-option label="降序" value="desc" /></el-select><el-button type="primary" @click="resetPageAndLoad">筛选</el-button><el-button @click="resetFilters">重置</el-button></div>
+      <el-table :data="rows" border stripe size="small" class="data-table" height="480" @sort-change="sortChange"><el-table-column type="index" label="#" width="52" fixed /><el-table-column v-for="field in detail.fields || []" :key="field.field_code" :prop="field.field_code" :label="field.unit ? `${field.field_name} (${field.unit})` : field.field_name" min-width="125" sortable="custom" show-overflow-tooltip><template #default="scope"><span :class="cellClass(field,scope.row[field.field_code])">{{ scope.row[field.field_code] ?? '-' }}</span></template></el-table-column><el-table-column label="操作" width="105" fixed="right"><template #default="scope"><el-button link type="primary" @click="editRow(scope.row)">编辑</el-button><el-button link type="danger" @click="removeRow(scope.row)">删除</el-button></template></el-table-column></el-table>
+      <div class="pagination-row"><span>共 {{ total }} 条</span><el-pagination v-model:current-page="query.page" v-model:page-size="query.page_size" layout="sizes, prev, pager, next, jumper" :page-sizes="[10,20,50,100]" :total="total" @change="loadRows" /></div>
+    </section>
 
-    <div class="data-table-card">
-      <div class="table-head">
-        <div><b>参数指标</b><span>动态字段来自 Excel 映射</span></div>
-        <el-button @click="showFields = !showFields">{{ showFields ? '收起字段定义' : '字段定义' }}</el-button>
-      </div>
-
-      <div v-if="showFields" class="field-chips">
-        <el-tag v-for="f in detail.fields || []" :key="f.id" effect="plain">
-          {{ f.field_name }} · {{ f.field_code }}<template v-if="f.unit"> · {{ f.unit }}</template>
-        </el-tag>
-      </div>
-
-      <el-table :data="rows" border class="data-table" @sort-change="sortChange">
-        <el-table-column type="index" label="#" width="56" fixed />
-        <el-table-column
-          v-for="f in detail.fields || []"
-          :key="f.field_code"
-          :prop="f.field_code"
-          :label="f.unit ? `${f.field_name} (${f.unit})` : f.field_name"
-          min-width="140"
-          sortable="custom"
-          show-overflow-tooltip
-        />
-        <el-table-column label="操作" width="120" fixed="right">
-          <template #default="scope">
-            <el-button link type="primary" @click="editRow(scope.row)">编辑</el-button>
-            <el-button link type="danger" @click="removeRow(scope.row)">删除</el-button>
-          </template>
-        </el-table-column>
-      </el-table>
-
-      <div class="pagination-row">
-        <span>共 {{ total }} 条</span>
-        <el-pagination
-          v-model:current-page="query.page"
-          v-model:page-size="query.page_size"
-          layout="sizes, prev, pager, next, jumper"
-          :page-sizes="[10,20,50,100]"
-          :total="total"
-          @change="loadRows"
-        />
-      </div>
-    </div>
-
-    <el-dialog v-model="editVisible" title="编辑参数" width="620px">
-      <el-form label-position="top" class="edit-grid">
-        <el-form-item v-for="f in detail.fields || []" :key="f.field_code" :label="f.unit ? `${f.field_name} (${f.unit})` : f.field_name">
-          <el-input v-model="editData[f.field_code]" />
-        </el-form-item>
-      </el-form>
-      <template #footer><el-button @click="editVisible=false">取消</el-button><el-button type="primary" @click="saveRow">保存</el-button></template>
-    </el-dialog>
-
+    <el-dialog v-model="editVisible" title="编辑参数" width="620px"><el-form label-position="top" class="edit-grid"><el-form-item v-for="f in detail.fields || []" :key="f.field_code" :label="f.unit ? `${f.field_name} (${f.unit})` : f.field_name"><el-input v-model="editData[f.field_code]" /></el-form-item></el-form><template #footer><el-button @click="editVisible=false">取消</el-button><el-button type="primary" @click="saveRow">保存</el-button></template></el-dialog>
     <ImportDrawer v-model="drawer" :default-knowledge-base-id="detail.knowledge_base?.id" />
   </div>
 </template>
@@ -100,96 +20,27 @@
 <script setup>
 import { computed, onMounted, reactive, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { ArrowLeft, DocumentAdd, Download } from '@element-plus/icons-vue'
+import { ArrowLeft, DocumentAdd, Download, Search } from '@element-plus/icons-vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import http from '../api/http.js'
 import ImportDrawer from '../components/ImportDrawer.vue'
-
-const route = useRoute()
-const router = useRouter()
-const detail = ref({ fields: [] })
-const rows = ref([])
-const total = ref(0)
-const loading = ref(false)
-const drawer = ref(false)
-const showFields = ref(false)
-const editVisible = ref(false)
-const editId = ref(null)
-const editData = reactive({})
-const query = reactive({ page: 1, page_size: 20, search: '', filters: {}, sort_by: null, sort_order: 'asc' })
-
-const filterFields = computed(() => (detail.value.fields || []).filter(x => x.filterable))
-
-async function loadDetail() {
-  const { data } = await http.get(`/datasets/${route.params.id}`)
-  detail.value = data
-  query.filters = {}
-}
-async function loadRows() {
-  const { data } = await http.post(`/datasets/${route.params.id}/query`, query)
-  rows.value = data.rows
-  total.value = data.total
-}
-async function load() {
-  loading.value = true
-  try { await loadDetail(); await loadRows() } finally { loading.value = false }
-}
-
-function goBack() {
-  const kbId = detail.value.knowledge_base?.id
-  if (kbId) router.push({ name: 'library', params: { id: kbId } })
-  else router.push({ name: 'dashboard' })
-}
-function resetPageAndLoad() { query.page = 1; loadRows() }
-function resetFilters() { query.search = ''; query.filters = {}; query.page = 1; loadRows() }
-function sortChange({ prop, order }) { query.sort_by = prop; query.sort_order = order === 'descending' ? 'desc' : 'asc'; loadRows() }
-
-function editRow(row) {
-  editId.value = row._id
-  for (const key of Object.keys(editData)) delete editData[key]
-  for (const f of detail.value.fields || []) editData[f.field_code] = row[f.field_code] ?? ''
-  editVisible.value = true
-}
-async function saveRow() {
-  try {
-    await http.put(`/records/${editId.value}`, { data: { ...editData } })
-    ElMessage.success('保存成功')
-    editVisible.value = false
-    loadRows()
-  } catch (e) { ElMessage.error(e.message) }
-}
-async function removeRow(row) {
-  try {
-    await ElMessageBox.confirm('确定删除这条参数吗？', '删除确认', { type: 'warning' })
-    await http.delete(`/records/${row._id}`)
-    ElMessage.success('已删除')
-    await loadDetail(); await loadRows()
-  } catch (e) { if (e !== 'cancel') console.warn(e) }
-}
-async function exportExcel() {
-  try {
-    const response = await http.get(`/datasets/${route.params.id}/export`, { responseType: 'blob' })
-    const disposition = response.headers['content-disposition'] || ''
-    let filename = `${detail.value.name || '参数数据'}.xlsx`
-    const utf8Match = disposition.match(/filename\*=UTF-8''([^;]+)/i)
-    const normalMatch = disposition.match(/filename=\"?([^\";]+)\"?/i)
-    if (utf8Match?.[1]) filename = decodeURIComponent(utf8Match[1])
-    else if (normalMatch?.[1]) filename = normalMatch[1]
-    const url = URL.createObjectURL(response.data)
-    const a = document.createElement('a')
-    a.href = url
-    a.download = filename
-    document.body.appendChild(a)
-    a.click()
-    a.remove()
-    URL.revokeObjectURL(url)
-  } catch (e) { ElMessage.error(e.message || '导出失败') }
-}
-
-watch(() => route.params.id, load)
-onMounted(load)
+const route=useRoute();const router=useRouter();const detail=ref({fields:[],knowledge_base:{}});const rows=ref([]);const total=ref(0);const loading=ref(false);const drawer=ref(false);const editVisible=ref(false);const editId=ref(null);const editData=reactive({});const query=reactive({page:1,page_size:40,search:'',filters:{},sort_by:null,sort_order:'asc'})
+const filterFields=computed(()=> (detail.value.fields||[]).filter(x=>x.filterable));const unitCount=computed(()=> (detail.value.fields||[]).filter(x=>x.unit).length);const pendingCount=computed(()=>rows.value.reduce((sum,row)=>sum+Object.values(row).filter(v=>/待授权|待录入|待确认|待补齐|缺失/.test(String(v??''))).length,0))
+const meaningMap={'公称口径':'阀门连接管道的名义尺寸，用于确定 DN/NPS 系列和后续标准查表键。','压力等级':'阀门承压等级，用于联动压力温度额定值、壁厚、法兰等数据。','通径形式':'流道是全通径还是缩径，决定球体流道直径和实际通流能力。','通道直径d':'阀门内部有效流道直径，是球体流道和介质通道的核心几何尺寸。','结构长度L':'阀门安装接口之间的面-面或端-端距离，用于管线安装互换和总装定位。','法兰外径':'端法兰最大外径，直接决定法兰外形包络。','法兰厚度':'端法兰轴向厚度，影响连接端和阀体接口尺寸。','螺栓中心圆':'法兰螺栓孔中心所在的圆直径（PCD）。','螺栓孔直径':'法兰螺栓孔的通孔直径，用于螺栓连接。','螺栓数量':'同一法兰圆周上的螺栓孔数量。','球体直径S':'球体外径/密封球面的主控尺寸，直接影响球体、阀座和阀体包络。','最小壁厚':'承压边界允许的最小设计壁厚，需要结合材料、压力、温度和腐蚀裕量校核。','材料组':'将材料牌号归入标准材料类别，以联动许用应力、温度和设计规则。','数据状态':'该数据是否已录入、待授权、待复核或仅作为项目占位。','标准来源':'参数来自哪个标准、企业规则、项目规格或用户输入，用于追溯。'}
+function meaning(name){return meaningMap[name]||`字段“${name}”用于当前数据集的规格查询、参数计算、设计校核或 SolidWorks 参数映射；正式工程含义以对应标准/项目文件为准。`}
+function cellClass(field,value){const text=String(value??'');if(/状态|数据状态/.test(field.field_name||''))return /已录入|可用|通过/.test(text)?'status-ok':/待|需复核/.test(text)?'status-warn':'status-info';if(/待授权|待录入|待确认|待补齐|缺失/.test(text))return'pending';return''}
+async function loadDetail(){const{data}=await http.get(`/datasets/${route.params.id}`);detail.value=data;query.filters={};(data.fields||[]).forEach(f=>query.filters[f.field_code]='');await loadRows()}
+async function loadRows(){const{data}=await http.post(`/datasets/${route.params.id}/query`,query);rows.value=data.rows||[];total.value=data.total||0}
+async function load(){loading.value=true;try{await loadDetail()}finally{loading.value=false}}
+function goBack(){const kbId=detail.value.knowledge_base?.id;if(kbId)router.push({name:'library',params:{id:kbId}});else router.push({name:'dashboard'})}
+function resetPageAndLoad(){query.page=1;loadRows()};function resetFilters(){query.search='';query.filters={};(detail.value.fields||[]).forEach(f=>query.filters[f.field_code]='');query.sort_by=null;query.sort_order='asc';query.page=1;loadRows()};function sortChange({prop,order}){query.sort_by=prop||null;query.sort_order=order==='descending'?'desc':'asc';query.page=1;loadRows()}
+function editRow(row){editId.value=row._id;Object.keys(editData).forEach(k=>delete editData[k]);(detail.value.fields||[]).forEach(f=>editData[f.field_code]=row[f.field_code]??'');editVisible.value=true}
+async function saveRow(){try{await http.put(`/records/${editId.value}`,{data:{...editData}});ElMessage.success('保存成功');editVisible.value=false;await loadRows()}catch(e){ElMessage.error(e.message)}}
+async function removeRow(row){try{await ElMessageBox.confirm('确定删除这条参数吗？','删除确认',{type:'warning'});await http.delete(`/records/${row._id}`);ElMessage.success('已删除');await loadDetail()}catch(e){if(e!=='cancel')console.warn(e)}}
+async function exportExcel(){try{const response=await http.get(`/datasets/${route.params.id}/export`,{responseType:'blob'});const disposition=response.headers['content-disposition']||'';let filename=`${detail.value.name||'参数数据'}.xlsx`;const utf8=disposition.match(/filename\*=UTF-8''([^;]+)/i);const normal=disposition.match(/filename=\"?([^\";]+)\"?/i);if(utf8?.[1])filename=decodeURIComponent(utf8[1]);else if(normal?.[1])filename=normal[1];const url=URL.createObjectURL(response.data);const a=document.createElement('a');a.href=url;a.download=filename;document.body.appendChild(a);a.click();a.remove();URL.revokeObjectURL(url)}catch(e){ElMessage.error(e.message||'导出失败')}}
+watch(()=>route.params.id,load);onMounted(load)
 </script>
 
 <style scoped>
-.page-back-row{margin-bottom:10px}.back-button{padding-left:2px;color:#5f7188}.back-button:hover{color:#1262df}
+.dataset-detail-page{padding-bottom:30px}.page-back-row{margin-bottom:8px}.back-button{padding-left:2px;color:#61748a}.back-button:hover{color:#1262df}.detail-hero{background:#fff;border:1px solid #e6ebf2;border-radius:12px;padding:17px 20px;display:flex;justify-content:space-between;align-items:center;gap:20px}.eyebrow{font-size:10px;color:#1262df;letter-spacing:.06em}.detail-hero h1{margin:4px 0;font-size:21px;color:#1d2d42}.detail-hero p{margin:0;color:#8997a8;font-size:10px}.detail-hero p span{margin:0 5px;color:#c1c8d0}.hero-actions{display:flex;align-items:center;gap:7px}.stat-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:9px;margin:9px 0}.stat-grid>div{background:#fff;border:1px solid #e6ebf2;border-radius:9px;padding:9px 12px}.stat-grid span,.stat-grid small{display:block;color:#8a98a9;font-size:10px}.stat-grid b{display:block;margin:3px 0;font-size:19px;color:#2c4058}.stat-grid .warn{color:#d27a12}.field-card-panel,.data-card{background:#fff;border:1px solid #e6ebf2;border-radius:10px;margin-top:9px;overflow:hidden}.section-head,.data-toolbar{display:flex;justify-content:space-between;align-items:center;gap:10px;padding:11px 14px;border-bottom:1px solid #edf1f5}.section-head b,.data-toolbar b{color:#2a3d55;font-size:13px}.section-head span,.data-toolbar span{margin-left:8px;color:#8a98a9;font-size:10px}.field-definition-grid{display:grid;grid-template-columns:repeat(5,1fr);gap:7px;padding:10px}.field-definition{background:#f7f9fc;border:1px solid #edf1f5;border-radius:7px;padding:8px 9px}.field-top{display:flex;justify-content:space-between;gap:5px}.field-top b{font-size:11px;color:#31445b}.field-top em{font-style:normal;font-size:9px;color:#1262df;background:#eaf2ff;padding:2px 4px;border-radius:4px}.field-code{font-size:9px;color:#a0aab7;margin-top:3px}.field-definition p{margin:5px 0 0;font-size:10px;line-height:1.45;color:#8391a2}.filter-bar{display:flex;gap:7px;align-items:center;padding:9px 10px;background:#fafbfc;border-bottom:1px solid #edf1f5;overflow:auto}.data-table :deep(th){background:#f7f9fc!important;color:#607187;font-size:11px}.data-table :deep(td){font-size:11px;color:#40536b}.pending{color:#d27a12;font-weight:600}.status-ok{color:#23945d;font-weight:600}.status-warn{color:#d27a12;font-weight:600}.status-info{color:#55708f}.pagination-row{height:48px;padding:0 12px;display:flex;justify-content:space-between;align-items:center;color:#8997a8;font-size:10px;border-top:1px solid #edf1f5}@media(max-width:1200px){.field-definition-grid{grid-template-columns:repeat(4,1fr)}}@media(max-width:900px){.stat-grid{grid-template-columns:repeat(2,1fr)}.field-definition-grid{grid-template-columns:repeat(3,1fr)}.detail-hero{align-items:flex-start;flex-direction:column}}@media(max-width:650px){.field-definition-grid{grid-template-columns:repeat(2,1fr)}}
 </style>
