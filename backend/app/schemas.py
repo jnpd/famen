@@ -23,7 +23,8 @@ class FieldMapping(BaseModel):
 
 class ImportPreviewRequest(BaseModel):
     sheet_name: str
-    header_row: int = Field(ge=0)
+    # -2 = 自动识别，-1 = 无表头，>=0 = 指定 0-based 表头行
+    header_row: int = Field(default=-2, ge=-2)
 
 
 class ImportCommitRequest(BaseModel):
@@ -32,7 +33,8 @@ class ImportCommitRequest(BaseModel):
     category: str | None = None
     standard_no: str | None = None
     sheet_name: str
-    header_row: int = Field(ge=0)
+    # 正式导入只接收已确认结果：-1 = 无表头，>=0 = 指定表头
+    header_row: int = Field(ge=-1)
     mappings: list[FieldMapping]
 
 
