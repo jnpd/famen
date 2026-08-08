@@ -8,6 +8,8 @@ from typing import Any
 
 import pandas as pd
 
+AUTO_HEADER = -2
+NO_HEADER = -1
 
 KNOWN_CODES = {
     "nps": "NPS",
@@ -37,15 +39,14 @@ KNOWN_CODES = {
     "许用应力": "ALLOWABLE_STRESS",
 }
 
-# 这些词只用于提高“像表头”的概率，不是业务字段白名单。
-# 没有命中这些词的 Excel 仍然可以通过结构特征识别。
+# 只用于增强“像表头”的结构判断，不是字段白名单。
 GENERIC_HEADER_HINTS = (
     "名称", "编号", "编码", "类型", "类别", "型号", "规格", "尺寸", "口径", "压力", "等级",
     "材料", "单位", "备注", "说明", "状态", "来源", "标准", "日期", "时间", "数量", "数值",
-    "参数", "字段", "变量", "项目", "内容", "范围", "方式", "用途", "是否", "示例",
+    "参数", "字段", "变量", "项目", "内容", "范围", "方式", "用途", "是否", "示例", "序号",
     "name", "id", "code", "type", "category", "model", "size", "pressure", "material",
     "unit", "remark", "note", "status", "source", "standard", "date", "time", "count",
-    "value", "parameter", "field", "variable", "description",
+    "value", "parameter", "field", "variable", "description", "no", "number",
 )
 OUTLINE_RE = re.compile(r"^\s*\d+(?:\.\d+)*\s*$")
 DATA_CODE_RE = re.compile(r"(?=.*[A-Za-z])(?=.*\d)[A-Za-z0-9_.\-/|]+$")
@@ -235,7 +236,6 @@ def _score_header_candidate(raw: pd.DataFrame, row_index: int) -> tuple[float, d
     score += contrast * 10.0
     score += min(len(following), 4) * 2.0
 
-    # 标题行/目录编号行最容易被误判为表头，因此这里明确降权。
     score -= float(features["outline_ratio"]) * 28.0
     score -= float(features["number_ratio"]) * 8.0
     if bool(features["title_like"]):
@@ -284,7 +284,6 @@ def _suggest_title(raw: pd.DataFrame, header_row: int | None, sheet_name: str) -
 
 
 def _confidence(score: float, features: dict[str, Any], has_title_above: bool) -> int:
-    # 先按结构分归一化，再根据表头语义和“像数据”的程度做修正。
     base = max(0.0, min(100.0, (score - 45.0) / 55.0 * 100.0))
     base += float(features.get("hint_ratio", 0.0)) * 16.0
     base += float(features.get("type_contrast", 0.0)) * 10.0
@@ -330,8 +329,6 @@ def analyze_sheet_structure(path: Path, sheet_name: str, scan_rows: int = 60) ->
         }
 
     best_score = ranked[0][1]
-    # 不单纯取最高分：在“接近最高分”的候选里取最靠前的一行。
-    # 这样能避开后续普通数据行，同时标题行已经在前面被强降权/排除。
     threshold = max(55.0, best_score * 0.90)
     close_candidates = [item for item in candidates if item[1] >= threshold]
     selected = min(close_candidates, key=lambda item: item[0]) if close_candidates else ranked[0]
@@ -341,7 +338,8 @@ def analyze_sheet_structure(path: Path, sheet_name: str, scan_rows: int = 60) ->
     has_title_above = title_row is not None and title_row < header_row
     confidence = _confidence(selected_score, features, has_title_above)
 
-    if best_score < 55.0:
+    # 对“整页都是键值说明/文档”的 Sheet 宁可低置信度，也不强行误导用户。
+    if best_score < 55.0 or (features.get("non_empty", 0) <= 2 and features.get("below_mask_similarity", 0) < 0.45):
         header_row = None
         confidence = min(confidence, 45)
         level = "low"
@@ -355,14 +353,10 @@ def analyze_sheet_structure(path: Path, sheet_name: str, scan_rows: int = 60) ->
         elif level == "medium":
             message = f"推荐第 {header_row + 1} 行为表头，请在导入前确认预览。"
         else:
-            message = f"表头识别可信度较低，当前推荐第 {header_row + 1} 行，请人工确认或选择“无表头”。"
+            message = f"表头识别可信度较低，当前推荐第 {header_row + 1} 行，请人工确认。"
 
     header_candidates = [
-        {
-            "row": idx,
-            "display_row": idx + 1,
-            "score": round(float(score), 1),
-        }
+        {"row": idx, "display_row": idx + 1, "score": round(float(score), 1)}
         for idx, score, _ in ranked[:5]
         if score >= 40
     ]
@@ -379,9 +373,13 @@ def analyze_sheet_structure(path: Path, sheet_name: str, scan_rows: int = 60) ->
     }
 
 
-def detect_header_row(path: Path, sheet_name: str) -> int | None:
-    """兼容旧调用：返回自动识别的 0-based 表头行；无法可靠识别时返回 None。"""
-    return analyze_sheet_structure(path, sheet_name)["header_row"]
+def detect_header_row(path: Path, sheet_name: str) -> int:
+    """返回 0-based 表头；低可信度时宁可返回 NO_HEADER，避免误吞第一条数据。"""
+    analysis = analyze_sheet_structure(path, sheet_name)
+    header = analysis.get("header_row")
+    if header is None or int(analysis.get("header_confidence", 0)) < 60:
+        return NO_HEADER
+    return int(header)
 
 
 def unique_columns(columns: list[Any]) -> list[str]:
@@ -412,7 +410,6 @@ def _trim_footer_rows(frame: pd.DataFrame) -> pd.DataFrame:
     if frame.empty:
         return frame
     cut_at = None
-    # 只在数据已经出现后，才把“备注/说明/合计”等窄行作为尾注切掉。
     for pos in range(len(frame)):
         if pos < 2:
             continue
@@ -422,13 +419,26 @@ def _trim_footer_rows(frame: pd.DataFrame) -> pd.DataFrame:
     return frame.iloc[:cut_at].copy() if cut_at is not None else frame
 
 
-def read_frame(path: Path, sheet_name: str, header_row: int | None) -> pd.DataFrame:
-    if header_row is None:
+def _resolve_header(path: Path, sheet_name: str, header_row: int) -> tuple[int, dict[str, Any]]:
+    analysis = analyze_sheet_structure(path, sheet_name)
+    if header_row == AUTO_HEADER:
+        detected = analysis.get("header_row")
+        confidence = int(analysis.get("header_confidence", 0))
+        if detected is None or confidence < 60:
+            return NO_HEADER, analysis
+        return int(detected), analysis
+    return header_row, analysis
+
+
+def read_frame(path: Path, sheet_name: str, header_row: int) -> pd.DataFrame:
+    resolved_header, _ = _resolve_header(path, sheet_name, header_row) if header_row == AUTO_HEADER else (header_row, {})
+
+    if resolved_header == NO_HEADER:
         frame = pd.read_excel(path, sheet_name=sheet_name, header=None, dtype=object)
         frame = frame.dropna(axis=0, how="all").dropna(axis=1, how="all")
         frame.columns = [f"字段{i}" for i in range(1, len(frame.columns) + 1)]
     else:
-        frame = pd.read_excel(path, sheet_name=sheet_name, header=header_row, dtype=object)
+        frame = pd.read_excel(path, sheet_name=sheet_name, header=resolved_header, dtype=object)
         frame = frame.dropna(axis=0, how="all").dropna(axis=1, how="all")
         frame.columns = unique_columns(list(frame.columns))
 
@@ -463,17 +473,9 @@ def guess_type(values: list[Any]) -> str:
     return "number" if numeric / len(non_null) >= 0.72 else "text"
 
 
-def preview_payload(
-    path: Path,
-    sheet_name: str,
-    header_row: int | None,
-    *,
-    analysis: dict[str, Any] | None = None,
-    header_mode: str = "row",
-    limit: int = 8,
-) -> dict:
-    analysis = analysis or analyze_sheet_structure(path, sheet_name)
-    frame = read_frame(path, sheet_name, header_row)
+def preview_payload(path: Path, sheet_name: str, header_row: int, limit: int = 8) -> dict:
+    resolved_header, analysis = _resolve_header(path, sheet_name, header_row)
+    frame = read_frame(path, sheet_name, resolved_header)
 
     columns = []
     for i, col in enumerate(frame.columns, start=1):
@@ -495,16 +497,20 @@ def preview_payload(
     for _, row in frame.head(limit).iterrows():
         preview_rows.append({col: _safe(row[col]) for col in frame.columns})
 
-    if header_row is None:
-        data_start_row = 1
+    has_header = resolved_header >= 0
+    data_start_row = resolved_header + 2 if has_header else 1
+    if header_row == AUTO_HEADER:
+        mode = "auto"
+    elif resolved_header == NO_HEADER:
+        mode = "none"
     else:
-        data_start_row = header_row + 2
+        mode = "row"
 
     return {
         "sheet_name": sheet_name,
-        "header_row": header_row,
-        "header_mode": header_mode,
-        "has_header": header_row is not None,
+        "header_row": resolved_header,
+        "header_mode": mode,
+        "has_header": has_header,
         "data_start_row": data_start_row,
         "columns": columns,
         "preview": preview_rows,
@@ -515,7 +521,9 @@ def preview_payload(
         "suggested_dataset_name": analysis.get("suggested_dataset_name") or sheet_name,
         "structure_type": analysis.get("structure_type", "table"),
         "header_candidates": analysis.get("header_candidates", []),
-        "detected_header_row": analysis.get("header_row"),
+        "detected_header_row": (
+            NO_HEADER if analysis.get("header_row") is None else int(analysis.get("header_row"))
+        ),
     }
 
 
