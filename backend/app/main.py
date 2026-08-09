@@ -41,6 +41,7 @@ from .services.excel_service import (
     read_frame,
     detect_header_row,
 )
+from .workbench_api import router as workbench_router
 
 BASE_DIR = Path(__file__).resolve().parents[1]
 UPLOAD_DIR = BASE_DIR / "uploads"
@@ -57,6 +58,7 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+app.include_router(workbench_router)
 
 
 @app.on_event("startup")
@@ -150,7 +152,6 @@ def change_password(
     password_hash, password_salt = hash_password(body.new_password)
     user.password_hash = password_hash
     user.password_salt = password_salt
-    # 修改密码后保留当前登录，注销其他设备会话。
     sessions = db.scalars(select(UserSession).where(UserSession.user_id == user.id)).all()
     for session in sessions:
         if session.token_hash != current_hash:
